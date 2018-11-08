@@ -57,12 +57,19 @@ func ValidateInitConfiguration(c *kubeadm.InitConfiguration) field.ErrorList {
 func ValidateClusterConfiguration(c *kubeadm.ClusterConfiguration) field.ErrorList {
 	allErrs := field.ErrorList{}
 	allErrs = append(allErrs, ValidateNetworking(&c.Networking, field.NewPath("networking"))...)
-	allErrs = append(allErrs, ValidateCertSANs(c.APIServerCertSANs, field.NewPath("apiServerCertSANs"))...)
+	allErrs = append(allErrs, ValidateAPIServer(&c.APIServer, field.NewPath("apiServer"))...)
 	allErrs = append(allErrs, ValidateAbsolutePath(c.CertificatesDir, field.NewPath("certificatesDir"))...)
 	allErrs = append(allErrs, ValidateFeatureGates(c.FeatureGates, field.NewPath("featureGates"))...)
 	allErrs = append(allErrs, ValidateHostPort(c.ControlPlaneEndpoint, field.NewPath("controlPlaneEndpoint"))...)
 	allErrs = append(allErrs, ValidateEtcd(&c.Etcd, field.NewPath("etcd"))...)
 	allErrs = append(allErrs, componentconfigs.Known.Validate(c)...)
+	return allErrs
+}
+
+// ValidateAPIServer validates a APIServer object and collects all encountered errors
+func ValidateAPIServer(a *kubeadm.APIServer, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	allErrs = append(allErrs, ValidateCertSANs(a.CertSANs, fldPath.Child("certSANs"))...)
 	return allErrs
 }
 
@@ -123,13 +130,8 @@ func ValidateDiscovery(d *kubeadm.Discovery, fldPath *field.Path) field.ErrorLis
 func ValidateDiscoveryBootstrapToken(b *kubeadm.BootstrapTokenDiscovery, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	if len(b.APIServerEndpoints) < 1 {
-		allErrs = append(allErrs, field.Required(fldPath, "APIServerEndpoints not set"))
-	}
-
-	// TODO remove once we support multiple api servers
-	if len(b.APIServerEndpoints) > 1 {
-		fmt.Println("[validation] WARNING: kubeadm doesn't fully support multiple API Servers yet")
+	if len(b.APIServerEndpoint) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath, "APIServerEndpoint is not set"))
 	}
 
 	if len(b.CACertHashes) == 0 && !b.UnsafeSkipCAVerification {
@@ -137,7 +139,7 @@ func ValidateDiscoveryBootstrapToken(b *kubeadm.BootstrapTokenDiscovery, fldPath
 	}
 
 	allErrs = append(allErrs, ValidateToken(b.Token, fldPath.Child("token"))...)
-	allErrs = append(allErrs, ValidateDiscoveryTokenAPIServer(b.APIServerEndpoints, fldPath.Child("apiServerEndpoints"))...)
+	allErrs = append(allErrs, ValidateDiscoveryTokenAPIServer(b.APIServerEndpoint, fldPath.Child("apiServerEndpoints"))...)
 
 	return allErrs
 }
@@ -152,13 +154,11 @@ func ValidateDiscoveryFile(f *kubeadm.FileDiscovery, fldPath *field.Path) field.
 }
 
 // ValidateDiscoveryTokenAPIServer validates discovery token for API server
-func ValidateDiscoveryTokenAPIServer(apiServers []string, fldPath *field.Path) field.ErrorList {
+func ValidateDiscoveryTokenAPIServer(apiServer string, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-	for _, m := range apiServers {
-		_, _, err := net.SplitHostPort(m)
-		if err != nil {
-			allErrs = append(allErrs, field.Invalid(fldPath, m, err.Error()))
-		}
+	_, _, err := net.SplitHostPort(apiServer)
+	if err != nil {
+		allErrs = append(allErrs, field.Invalid(fldPath, apiServer, err.Error()))
 	}
 	return allErrs
 }

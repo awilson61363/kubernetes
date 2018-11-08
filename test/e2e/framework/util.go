@@ -394,6 +394,12 @@ func SkipUnlessSecretExistsAfterWait(c clientset.Interface, name, namespace stri
 	Logf("Secret %v in namespace %v found after duration %v", name, namespace, time.Since(start))
 }
 
+func SkipUnlessTaintBasedEvictionsEnabled() {
+	if !utilfeature.DefaultFeatureGate.Enabled(features.TaintBasedEvictions) {
+		Skipf("Only supported when %v feature is enabled", features.TaintBasedEvictions)
+	}
+}
+
 func SkipIfContainerRuntimeIs(runtimes ...string) {
 	for _, runtime := range runtimes {
 		if runtime == TestContext.ContainerRuntime {
@@ -3155,7 +3161,10 @@ func DeleteResourceAndWaitForGC(c clientset.Interface, kind schema.GroupKind, ns
 	terminatePodTime := time.Since(startTime) - deleteTime
 	Logf("Terminating %v %s pods took: %v", kind, name, terminatePodTime)
 
-	err = waitForPodsGone(ps, interval, 10*time.Minute)
+	// In gce, at any point, small percentage of nodes can disappear for
+	// ~10 minutes due to hostError. 20 minutes should be long enough to
+	// restart VM in that case and delete the pod.
+	err = waitForPodsGone(ps, interval, 20*time.Minute)
 	if err != nil {
 		return fmt.Errorf("error while waiting for pods gone %s: %v", name, err)
 	}
@@ -3167,25 +3176,48 @@ func DeleteResourceAndWaitForGC(c clientset.Interface, kind schema.GroupKind, ns
 // and DeleteRCAndWaitForGC, because the RC controller decreases status.replicas
 // when the pod is inactvie.
 func waitForPodsInactive(ps *testutils.PodStore, interval, timeout time.Duration) error {
-	return wait.PollImmediate(interval, timeout, func() (bool, error) {
+	var activePods []*v1.Pod
+	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
 		pods := ps.List()
+		activePods = nil
 		for _, pod := range pods {
 			if controller.IsPodActive(pod) {
-				return false, nil
+				activePods = append(activePods, pod)
 			}
+		}
+
+		if len(activePods) != 0 {
+			return false, nil
 		}
 		return true, nil
 	})
+
+	if err == wait.ErrWaitTimeout {
+		for _, pod := range activePods {
+			Logf("ERROR: Pod %q running on %q is still active", pod.Name, pod.Spec.NodeName)
+		}
+		return fmt.Errorf("there are %d active pods. E.g. %q on node %q", len(activePods), activePods[0].Name, activePods[0].Spec.NodeName)
+	}
+	return err
 }
 
 // waitForPodsGone waits until there are no pods left in the PodStore.
 func waitForPodsGone(ps *testutils.PodStore, interval, timeout time.Duration) error {
-	return wait.PollImmediate(interval, timeout, func() (bool, error) {
-		if pods := ps.List(); len(pods) == 0 {
+	var pods []*v1.Pod
+	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
+		if pods = ps.List(); len(pods) == 0 {
 			return true, nil
 		}
 		return false, nil
 	})
+
+	if err == wait.ErrWaitTimeout {
+		for _, pod := range pods {
+			Logf("ERROR: Pod %q still exists. Node: %q", pod.Name, pod.Spec.NodeName)
+		}
+		return fmt.Errorf("there are %d pods left. E.g. %q on node %q", len(pods), pods[0].Name, pods[0].Spec.NodeName)
+	}
+	return err
 }
 
 func WaitForPodsReady(c clientset.Interface, ns, name string, minReadySeconds int) error {
@@ -4928,19 +4960,28 @@ func getMaster(c clientset.Interface) Address {
 	return master
 }
 
-// GetMasterAddress returns the hostname/external IP/internal IP as appropriate for e2e tests on a particular provider
-// which is the address of the interface used for communication with the kubelet.
-func GetMasterAddress(c clientset.Interface) string {
+// GetAllMasterAddresses returns all IP addresses on which the kubelet can reach the master.
+// It may return internal and external IPs, even if we expect for
+// e.g. internal IPs to be used (issue #56787), so that we can be
+// sure to block the master fully during tests.
+func GetAllMasterAddresses(c clientset.Interface) []string {
 	master := getMaster(c)
+
+	ips := sets.NewString()
 	switch TestContext.Provider {
 	case "gce", "gke":
-		return master.externalIP
+		if master.externalIP != "" {
+			ips.Insert(master.externalIP)
+		}
+		if master.internalIP != "" {
+			ips.Insert(master.internalIP)
+		}
 	case "aws":
-		return awsMasterIP
+		ips.Insert(awsMasterIP)
 	default:
 		Failf("This test is not supported for provider %s and should be disabled", TestContext.Provider)
 	}
-	return ""
+	return ips.List()
 }
 
 // GetNodeExternalIP returns node external IP concatenated with port 22 for ssh
@@ -5196,4 +5237,18 @@ func GetClusterZones(c clientset.Interface) (sets.String, error) {
 		}
 	}
 	return zones, nil
+}
+
+// WaitForNodeHasTaintOrNot waits for a taint to be added/removed from the node until timeout occurs, whichever comes first.
+func WaitForNodeHasTaintOrNot(c clientset.Interface, nodeName string, taint *v1.Taint, wantTrue bool, timeout time.Duration) error {
+	if err := wait.PollImmediate(Poll, timeout, func() (bool, error) {
+		has, err := NodeHasTaint(c, nodeName, taint)
+		if err != nil {
+			return false, fmt.Errorf("failed to check taint %s on node %s or not", taint.ToString(), nodeName)
+		}
+		return has == wantTrue, nil
+	}); err != nil {
+		return fmt.Errorf("expect node %v to have taint = %v within %v: %v", nodeName, wantTrue, timeout, err)
+	}
+	return nil
 }

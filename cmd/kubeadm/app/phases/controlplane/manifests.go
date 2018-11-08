@@ -42,26 +42,8 @@ import (
 
 // CreateInitStaticPodManifestFiles will write all static pod manifest files needed to bring up the control plane.
 func CreateInitStaticPodManifestFiles(manifestDir string, cfg *kubeadmapi.InitConfiguration) error {
-	glog.V(1).Infoln("[controlplane] creating static pod files")
-	return createStaticPodFiles(manifestDir, cfg, kubeadmconstants.KubeAPIServer, kubeadmconstants.KubeControllerManager, kubeadmconstants.KubeScheduler)
-}
-
-// CreateAPIServerStaticPodManifestFile will write APIserver static pod manifest file.
-func CreateAPIServerStaticPodManifestFile(manifestDir string, cfg *kubeadmapi.InitConfiguration) error {
-	glog.V(1).Infoln("creating APIserver static pod files")
-	return createStaticPodFiles(manifestDir, cfg, kubeadmconstants.KubeAPIServer)
-}
-
-// CreateControllerManagerStaticPodManifestFile will write  controller manager static pod manifest file.
-func CreateControllerManagerStaticPodManifestFile(manifestDir string, cfg *kubeadmapi.InitConfiguration) error {
-	glog.V(1).Infoln("creating controller manager static pod files")
-	return createStaticPodFiles(manifestDir, cfg, kubeadmconstants.KubeControllerManager)
-}
-
-// CreateSchedulerStaticPodManifestFile will write scheduler static pod manifest file.
-func CreateSchedulerStaticPodManifestFile(manifestDir string, cfg *kubeadmapi.InitConfiguration) error {
-	glog.V(1).Infoln("creating scheduler static pod files")
-	return createStaticPodFiles(manifestDir, cfg, kubeadmconstants.KubeScheduler)
+	glog.V(1).Infoln("[control-plane] creating static Pod files")
+	return CreateStaticPodFiles(manifestDir, cfg, kubeadmconstants.KubeAPIServer, kubeadmconstants.KubeControllerManager, kubeadmconstants.KubeScheduler)
 }
 
 // GetStaticPodSpecs returns all staticPodSpecs actualized to the context of the current InitConfiguration
@@ -106,8 +88,8 @@ func GetStaticPodSpecs(cfg *kubeadmapi.InitConfiguration, k8sVersion *version.Ve
 	return staticPodSpecs
 }
 
-// createStaticPodFiles creates all the requested static pod files.
-func createStaticPodFiles(manifestDir string, cfg *kubeadmapi.InitConfiguration, componentNames ...string) error {
+// CreateStaticPodFiles creates all the requested static pod files.
+func CreateStaticPodFiles(manifestDir string, cfg *kubeadmapi.InitConfiguration, componentNames ...string) error {
 	// TODO: Move the "pkg/util/version".Version object into the internal API instead of always parsing the string
 	k8sVersion, err := version.ParseSemantic(cfg.KubernetesVersion)
 	if err != nil {
@@ -115,7 +97,7 @@ func createStaticPodFiles(manifestDir string, cfg *kubeadmapi.InitConfiguration,
 	}
 
 	// gets the StaticPodSpecs, actualized for the current InitConfiguration
-	glog.V(1).Infoln("[controlplane] getting StaticPodSpecs")
+	glog.V(1).Infoln("[control-plane] getting StaticPodSpecs")
 	specs := GetStaticPodSpecs(cfg, k8sVersion)
 
 	// creates required static pod specs
@@ -123,7 +105,7 @@ func createStaticPodFiles(manifestDir string, cfg *kubeadmapi.InitConfiguration,
 		// retrives the StaticPodSpec for given component
 		spec, exists := specs[componentName]
 		if !exists {
-			return errors.Errorf("couldn't retrive StaticPodSpec for %s", componentName)
+			return errors.Errorf("couldn't retrive StaticPodSpec for %q", componentName)
 		}
 
 		// writes the StaticPodSpec to disk
@@ -131,7 +113,7 @@ func createStaticPodFiles(manifestDir string, cfg *kubeadmapi.InitConfiguration,
 			return errors.Wrapf(err, "failed to create static pod manifest file for %q", componentName)
 		}
 
-		fmt.Printf("[controlplane] wrote Static Pod manifest for component %s to %q\n", componentName, kubeadmconstants.GetStaticPodFilepath(componentName, manifestDir))
+		glog.V(1).Infof("[control-plane] wrote static Pod manifest for component %q to %q\n", componentName, kubeadmconstants.GetStaticPodFilepath(componentName, manifestDir))
 	}
 
 	return nil
@@ -194,10 +176,6 @@ func getAPIServerCommand(cfg *kubeadmapi.InitConfiguration) []string {
 		}
 	}
 
-	if features.Enabled(cfg.FeatureGates, features.HighAvailability) {
-		defaultArguments["endpoint-reconciler-type"] = kubeadmconstants.LeaseEndpointReconcilerType
-	}
-
 	if features.Enabled(cfg.FeatureGates, features.DynamicKubeletConfig) {
 		defaultArguments["feature-gates"] = "DynamicKubeletConfig=true"
 	}
@@ -211,11 +189,11 @@ func getAPIServerCommand(cfg *kubeadmapi.InitConfiguration) []string {
 			defaultArguments["audit-log-maxage"] = fmt.Sprintf("%d", *cfg.AuditPolicyConfiguration.LogMaxAge)
 		}
 	}
-	if cfg.APIServerExtraArgs == nil {
-		cfg.APIServerExtraArgs = map[string]string{}
+	if cfg.APIServer.ExtraArgs == nil {
+		cfg.APIServer.ExtraArgs = map[string]string{}
 	}
-	cfg.APIServerExtraArgs["authorization-mode"] = getAuthzModes(cfg.APIServerExtraArgs["authorization-mode"])
-	command = append(command, kubeadmutil.BuildArgumentListFromMap(defaultArguments, cfg.APIServerExtraArgs)...)
+	cfg.APIServer.ExtraArgs["authorization-mode"] = getAuthzModes(cfg.APIServer.ExtraArgs["authorization-mode"])
+	command = append(command, kubeadmutil.BuildArgumentListFromMap(defaultArguments, cfg.APIServer.ExtraArgs)...)
 
 	return command
 }
@@ -320,7 +298,7 @@ func getControllerManagerCommand(cfg *kubeadmapi.InitConfiguration, k8sVersion *
 	}
 
 	command := []string{"kube-controller-manager"}
-	command = append(command, kubeadmutil.BuildArgumentListFromMap(defaultArguments, cfg.ControllerManagerExtraArgs)...)
+	command = append(command, kubeadmutil.BuildArgumentListFromMap(defaultArguments, cfg.ControllerManager.ExtraArgs)...)
 
 	return command
 }
@@ -334,7 +312,7 @@ func getSchedulerCommand(cfg *kubeadmapi.InitConfiguration) []string {
 	}
 
 	command := []string{"kube-scheduler"}
-	command = append(command, kubeadmutil.BuildArgumentListFromMap(defaultArguments, cfg.SchedulerExtraArgs)...)
+	command = append(command, kubeadmutil.BuildArgumentListFromMap(defaultArguments, cfg.Scheduler.ExtraArgs)...)
 	return command
 }
 

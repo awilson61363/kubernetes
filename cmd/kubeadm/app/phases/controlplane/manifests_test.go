@@ -91,24 +91,19 @@ func TestGetStaticPodSpecs(t *testing.T) {
 func TestCreateStaticPodFilesAndWrappers(t *testing.T) {
 
 	var tests = []struct {
-		createStaticPodFunction func(outDir string, cfg *kubeadmapi.InitConfiguration) error
-		expectedFiles           []string
+		components []string
 	}{
-		{ // CreateInitStaticPodManifestFiles
-			createStaticPodFunction: CreateInitStaticPodManifestFiles,
-			expectedFiles:           []string{kubeadmconstants.KubeAPIServer, kubeadmconstants.KubeControllerManager, kubeadmconstants.KubeScheduler},
+		{
+			components: []string{kubeadmconstants.KubeAPIServer, kubeadmconstants.KubeControllerManager, kubeadmconstants.KubeScheduler},
 		},
-		{ // CreateAPIServerStaticPodManifestFile
-			createStaticPodFunction: CreateAPIServerStaticPodManifestFile,
-			expectedFiles:           []string{kubeadmconstants.KubeAPIServer},
+		{
+			components: []string{kubeadmconstants.KubeAPIServer},
 		},
-		{ // CreateControllerManagerStaticPodManifestFile
-			createStaticPodFunction: CreateControllerManagerStaticPodManifestFile,
-			expectedFiles:           []string{kubeadmconstants.KubeControllerManager},
+		{
+			components: []string{kubeadmconstants.KubeControllerManager},
 		},
-		{ // CreateSchedulerStaticPodManifestFile
-			createStaticPodFunction: CreateSchedulerStaticPodManifestFile,
-			expectedFiles:           []string{kubeadmconstants.KubeScheduler},
+		{
+			components: []string{kubeadmconstants.KubeScheduler},
 		},
 	}
 
@@ -127,16 +122,16 @@ func TestCreateStaticPodFilesAndWrappers(t *testing.T) {
 
 		// Execute createStaticPodFunction
 		manifestPath := filepath.Join(tmpdir, kubeadmconstants.ManifestsSubDirName)
-		err := test.createStaticPodFunction(manifestPath, cfg)
+		err := CreateStaticPodFiles(manifestPath, cfg, test.components...)
 		if err != nil {
 			t.Errorf("Error executing createStaticPodFunction: %v", err)
 			continue
 		}
 
 		// Assert expected files are there
-		testutil.AssertFilesCount(t, manifestPath, len(test.expectedFiles))
+		testutil.AssertFilesCount(t, manifestPath, len(test.components))
 
-		for _, fileName := range test.expectedFiles {
+		for _, fileName := range test.components {
 			testutil.AssertFileExists(t, manifestPath, fileName+".yaml")
 		}
 	}
@@ -275,8 +270,7 @@ func TestGetAPIServerCommand(t *testing.T) {
 			cfg: &kubeadmapi.InitConfiguration{
 				APIEndpoint: kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "2001:db8::1"},
 				ClusterConfiguration: kubeadmapi.ClusterConfiguration{
-					Networking:   kubeadmapi.Networking{ServiceSubnet: "bar"},
-					FeatureGates: map[string]bool{features.HighAvailability: true},
+					Networking: kubeadmapi.Networking{ServiceSubnet: "bar"},
 					Etcd: kubeadmapi.Etcd{
 						External: &kubeadmapi.ExternalEtcd{
 							Endpoints: []string{"https://8.6.4.1:2379", "https://8.6.4.2:2379"},
@@ -316,7 +310,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 				"--etcd-cafile=fuz",
 				"--etcd-certfile=fiz",
 				"--etcd-keyfile=faz",
-				fmt.Sprintf("--endpoint-reconciler-type=%s", kubeadmconstants.LeaseEndpointReconcilerType),
 			},
 		},
 		{
@@ -361,12 +354,12 @@ func TestGetAPIServerCommand(t *testing.T) {
 			},
 		},
 		{
-			name: "auditing and HA are enabled with a custom log max age of 0",
+			name: "auditing is enabled with a custom log max age of 0",
 			cfg: &kubeadmapi.InitConfiguration{
 				APIEndpoint: kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "2001:db8::1"},
 				ClusterConfiguration: kubeadmapi.ClusterConfiguration{
 					Networking:      kubeadmapi.Networking{ServiceSubnet: "bar"},
-					FeatureGates:    map[string]bool{features.HighAvailability: true, features.Auditing: true},
+					FeatureGates:    map[string]bool{features.Auditing: true},
 					CertificatesDir: testCertsDir,
 					AuditPolicyConfiguration: kubeadmapi.AuditPolicyConfiguration{
 						LogMaxAge: utilpointer.Int32Ptr(0),
@@ -401,7 +394,6 @@ func TestGetAPIServerCommand(t *testing.T) {
 				"--etcd-cafile=" + testCertsDir + "/etcd/ca.crt",
 				"--etcd-certfile=" + testCertsDir + "/apiserver-etcd-client.crt",
 				"--etcd-keyfile=" + testCertsDir + "/apiserver-etcd-client.key",
-				fmt.Sprintf("--endpoint-reconciler-type=%s", kubeadmconstants.LeaseEndpointReconcilerType),
 				"--audit-policy-file=/etc/kubernetes/audit/audit.yaml",
 				"--audit-log-path=/var/log/kubernetes/audit/audit.log",
 				"--audit-log-maxage=0",
@@ -449,18 +441,22 @@ func TestGetAPIServerCommand(t *testing.T) {
 			},
 		},
 		{
-			name: "test APIServerExtraArgs works as expected",
+			name: "test APIServer.ExtraArgs works as expected",
 			cfg: &kubeadmapi.InitConfiguration{
 				APIEndpoint: kubeadmapi.APIEndpoint{BindPort: 123, AdvertiseAddress: "1.2.3.4"},
 				ClusterConfiguration: kubeadmapi.ClusterConfiguration{
 					Networking:      kubeadmapi.Networking{ServiceSubnet: "bar"},
 					CertificatesDir: testCertsDir,
 					FeatureGates:    map[string]bool{features.DynamicKubeletConfig: true, features.Auditing: true},
-					APIServerExtraArgs: map[string]string{
-						"service-cluster-ip-range": "baz",
-						"advertise-address":        "9.9.9.9",
-						"audit-policy-file":        "/etc/config/audit.yaml",
-						"audit-log-path":           "/var/log/kubernetes",
+					APIServer: kubeadmapi.APIServer{
+						ControlPlaneComponent: kubeadmapi.ControlPlaneComponent{
+							ExtraArgs: map[string]string{
+								"service-cluster-ip-range": "baz",
+								"advertise-address":        "9.9.9.9",
+								"audit-policy-file":        "/etc/config/audit.yaml",
+								"audit-log-path":           "/var/log/kubernetes",
+							},
+						},
 					},
 				},
 			},
@@ -505,8 +501,12 @@ func TestGetAPIServerCommand(t *testing.T) {
 				ClusterConfiguration: kubeadmapi.ClusterConfiguration{
 					Networking:      kubeadmapi.Networking{ServiceSubnet: "bar"},
 					CertificatesDir: testCertsDir,
-					APIServerExtraArgs: map[string]string{
-						"authorization-mode": authzmodes.ModeABAC,
+					APIServer: kubeadmapi.APIServer{
+						ControlPlaneComponent: kubeadmapi.ControlPlaneComponent{
+							ExtraArgs: map[string]string{
+								"authorization-mode": authzmodes.ModeABAC,
+							},
+						},
 					},
 				},
 			},
@@ -547,8 +547,12 @@ func TestGetAPIServerCommand(t *testing.T) {
 				ClusterConfiguration: kubeadmapi.ClusterConfiguration{
 					Networking:      kubeadmapi.Networking{ServiceSubnet: "bar"},
 					CertificatesDir: testCertsDir,
-					APIServerExtraArgs: map[string]string{
-						"insecure-port": "1234",
+					APIServer: kubeadmapi.APIServer{
+						ControlPlaneComponent: kubeadmapi.ControlPlaneComponent{
+							ExtraArgs: map[string]string{
+								"insecure-port": "1234",
+							},
+						},
 					},
 				},
 			},
@@ -589,8 +593,12 @@ func TestGetAPIServerCommand(t *testing.T) {
 				ClusterConfiguration: kubeadmapi.ClusterConfiguration{
 					Networking:      kubeadmapi.Networking{ServiceSubnet: "bar"},
 					CertificatesDir: testCertsDir,
-					APIServerExtraArgs: map[string]string{
-						"authorization-mode": authzmodes.ModeWebhook,
+					APIServer: kubeadmapi.APIServer{
+						ControlPlaneComponent: kubeadmapi.ControlPlaneComponent{
+							ExtraArgs: map[string]string{
+								"authorization-mode": authzmodes.ModeWebhook,
+							},
+						},
 					},
 				},
 			},
@@ -715,10 +723,12 @@ func TestGetControllerManagerCommand(t *testing.T) {
 		{
 			name: "custom extra-args for v1.12.0-beta.2",
 			cfg: &kubeadmapi.ClusterConfiguration{
-				Networking:                 kubeadmapi.Networking{PodSubnet: "10.0.1.15/16"},
-				ControllerManagerExtraArgs: map[string]string{"node-cidr-mask-size": "20"},
-				CertificatesDir:            testCertsDir,
-				KubernetesVersion:          "v1.12.0-beta.2",
+				Networking: kubeadmapi.Networking{PodSubnet: "10.0.1.15/16"},
+				ControllerManager: kubeadmapi.ControlPlaneComponent{
+					ExtraArgs: map[string]string{"node-cidr-mask-size": "20"},
+				},
+				CertificatesDir:   testCertsDir,
+				KubernetesVersion: "v1.12.0-beta.2",
 			},
 			expected: []string{
 				"kube-controller-manager",
@@ -812,10 +822,12 @@ func TestGetControllerManagerCommand(t *testing.T) {
 		{
 			name: "custom extra-args for v1.11.3",
 			cfg: &kubeadmapi.ClusterConfiguration{
-				Networking:                 kubeadmapi.Networking{PodSubnet: "10.0.1.15/16"},
-				ControllerManagerExtraArgs: map[string]string{"node-cidr-mask-size": "20"},
-				CertificatesDir:            testCertsDir,
-				KubernetesVersion:          "v1.11.3",
+				Networking: kubeadmapi.Networking{PodSubnet: "10.0.1.15/16"},
+				ControllerManager: kubeadmapi.ControlPlaneComponent{
+					ExtraArgs: map[string]string{"node-cidr-mask-size": "20"},
+				},
+				CertificatesDir:   testCertsDir,
+				KubernetesVersion: "v1.11.3",
 			},
 			expected: []string{
 				"kube-controller-manager",
